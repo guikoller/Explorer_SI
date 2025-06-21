@@ -181,19 +181,26 @@ class Rescuer(AbstAgent):
         logging.debug("Creating initial population")
         population = []
 
-        # Create a few individuals ordered by x and y coordinates
-        sorted_sequence = dict(sorted(sequence.items(), key=lambda item: (item[1][0][0], item[1][0][1])))
-        for _ in range(pop_size // 2):
-            population.append(sorted_sequence)
+        # Add a greedy individual
+        population.append(self.greedy_individual(sequence))
 
-        # Create the rest of the population using random shuffling
-        for _ in range(pop_size - len(population)):
+        # Add individuals sorted by different heuristics
+        by_x = dict(sorted(sequence.items(), key=lambda item: item[1][0][0]))
+        by_y = dict(sorted(sequence.items(), key=lambda item: item[1][0][1]))
+        by_gravity = dict(sorted(sequence.items(), key=lambda item: item[1][1][6], reverse=True))  # highest gravity first
+        by_priority = dict(sorted(sequence.items(), key=lambda item: 5 - item[1][1][7], reverse=True))  # highest priority first
+
+        population.extend([by_x, by_y, by_gravity, by_priority])
+
+        # Fill the rest randomly
+        while len(population) < pop_size:
             individual = list(sequence.items())
             random.shuffle(individual)
             population.append(dict(individual))
 
-        logging.debug(f"Initial population created: {population}")
+        logging.debug(f"Initial population created with {len(population)} individuals.")
         return population
+
     
     def greedy_individual(self, sequence):
         """Create an individual using a greedy approach with some randomness."""
@@ -204,7 +211,10 @@ class Rescuer(AbstAgent):
 
         while unvisited:
             # Find the nearest unvisited victims
-            distances = [(item, a_star.get_shortest_cost(current_position, item[1][0])) for item in unvisited]
+            distances = [
+                (item, a_star.get_shortest_cost(current_position, item[1][0]) / (item[1][1][6] + 1))  # prioritize severity
+                for item in unvisited
+            ]
             distances.sort(key=lambda x: x[1])
 
             # Introduce randomness: select one of the nearest victims
@@ -218,51 +228,61 @@ class Rescuer(AbstAgent):
         return individual
     
     def calculate_score(self, individual):
-        # logging.debug(f"Calculating score for individual: {individual}")
-        # Initialize A* algorithm
         a_astar = AStar((0, 0), self.map)
-        
+
         total_time = 0
-        total_gravity = 0
-        total_class_priority = 0
+        weighted_gravity_score = 0
+        weighted_class_score = 0
         walking_time = 0
-        time_limit = self.TLIM - 100  # TLIM minus a buffer value of 100
+        time_limit = self.TLIM - 100  # buffer for return
 
         keys = list(individual.keys())
-        start = (0, 0)  # Start from the base
+        start = (0, 0)
 
-        for i in range(len(keys)):
-            vic_id = keys[i]
+        for i, vic_id in enumerate(keys):
             goal = individual[vic_id][0]
-            # print("start", start)
-            # print("goal", goal)
             vs = individual[vic_id][1]
-            gravity = vs[6]
-            class_priority = 5 - vs[7]  # Convert class to priority (1 -> 4, 2 -> 3, 3 -> 2, 4 -> 1)
 
-            # Normalize gravity to a scale of 0 to 4
-            normalized_gravity = (gravity / 100) * 4
+            gravity = vs[6]           # [0–100]
+            class_priority = 5 - vs[7]  # class: 1 → 4, 2 → 3, ..., 4 → 1
 
-            # Get the shortest cost using A*
+            # Normalize both scores to [0, 1]
+            norm_gravity = gravity / 100
+            norm_priority = class_priority / 4
+
+            # Path cost
             cost = a_astar.get_shortest_cost(start, goal)
             if cost == -1:
-                # logging.debug(f"Invalid path for individual: {individual}")
-                return float('inf')  # Invalid path, return a high score
+                return float('inf')  # invalid path
+
             cost += self.COST_FIRST_AID
             total_time += cost
-            total_gravity += normalized_gravity
-            total_class_priority += class_priority
             walking_time += cost
 
-            # Penalize high-priority victims appearing later in the sequence
+            # Give more weight to early rescues of high-priority victims
             position_weight = (len(keys) - i) / len(keys)
-            total_gravity += normalized_gravity * position_weight
-            total_class_priority += class_priority * position_weight
+
+            weighted_gravity_score += norm_gravity * position_weight
+            weighted_class_score += norm_priority * position_weight
 
             start = goal
 
-        # Calculate the final score based on gravity, class priority, and walking time
-        score = (total_gravity * 10) + (total_class_priority * 10) - (walking_time * 5)
+        # Normalize walking time (if needed, depending on max possible time in your map)
+        norm_walk_time = walking_time / max(self.TLIM, 1)
+
+        # Penalize plans that exceed the time limit
+        overtime_penalty = 0
+        if total_time > time_limit:
+            overtime_penalty = (total_time - time_limit) * 10
+
+        # Weighted score formula
+        score = (
+            weighted_gravity_score * 50 +
+            weighted_class_score * 50 -
+            norm_walk_time * 40 +
+            overtime_penalty
+        )
+
         logging.debug(f"Score for individual: {score}")
         logging.debug(f"Time for individual: {total_time}")
         return score
@@ -270,7 +290,7 @@ class Rescuer(AbstAgent):
     def select_bests(self, scores, population):
         logging.debug("Selecting best individuals")
         # Sort the population based on the scores in ascending order
-        sorted_population = [x for _, x in sorted(zip(scores, population), key=lambda pair: pair[0])]
+        sorted_population = [x for _, x in sorted(zip(scores, population), key=lambda pair: pair[0], reverse=True)]
         # Select the top half of the sorted population
         selected_population = sorted_population[:len(population) // 2]
         # logging.debug(f"Selected best individuals: {selected_population}")
@@ -280,29 +300,36 @@ class Rescuer(AbstAgent):
         logging.debug("Reproducing new generation")
         children = []
         num_selected = len(selecteds)
-        mutation_rate = 0.2  # Increased Mutation rate
+        mutation_rate = 0.35  # Slightly higher for exploration
 
         for i in range(num_selected):
             parent1 = list(selecteds[i].items())
-            parent2 = list(selecteds[(i + 1) % num_selected].items())  # Pair with the next, wrap around if odd
+            parent2 = list(selecteds[(i + 1) % num_selected].items())
 
             # Order Crossover (OX)
             start, end = sorted(random.sample(range(len(parent1)), 2))
             child = [None] * len(parent1)
             child[start:end] = parent1[start:end]
-
             parent2_items = [item for item in parent2 if item not in child]
             child = [item if item is not None else parent2_items.pop(0) for item in child]
             child = dict(child)
 
-            # Apply mutation (Swap Mutation)
+            # Swap Mutation
             if random.random() < mutation_rate:
                 keys = list(child.keys())
                 idx1, idx2 = random.sample(range(len(keys)), 2)
                 keys[idx1], keys[idx2] = keys[idx2], keys[idx1]
                 child = {key: child[key] for key in keys}
 
+            # Inversion Mutation (new)
+            if random.random() < 0.15:
+                keys = list(child.items())
+                start, end = sorted(random.sample(range(len(keys)), 2))
+                keys[start:end] = reversed(keys[start:end])
+                child = dict(keys)
+
             children.append(child)
+
         return children
     
     def select_the_best(self, population):
@@ -312,27 +339,52 @@ class Rescuer(AbstAgent):
         return best
 
     def sequencing(self):
-        """ This method uses a Genetic Algorithm to find the possibly best visiting order """
+        """ Genetic Algorithm with Elitism, Early Stopping, and Multiprocessing """
+        from concurrent.futures import ThreadPoolExecutor
 
-        pop_size = 10  # Reduced Population size
-        gen_size = 7  # Reduced Number of generations
-
+        pop_size = 20
+        gen_size = 10
+        early_stop_patience = 5
         new_sequences = []
 
-        for seq in self.sequences:  # Process each sequence separately
-            # logging.info(f"Processing sequence: {seq}")
-            population = self.create_population(seq, pop_size)  # Step 1: Generate initial population
+        for seq in self.sequences:
+            population = self.create_population(seq, pop_size)
+            best_individual = None
+            best_score = float('inf')
+            no_improvement = 0
 
-            for gen in range(gen_size):  # Step 2: Run genetic evolution
+            for gen in range(gen_size):
                 logging.info(f"Generation {gen}")
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    scores = list(executor.map(self.calculate_score, population))  # Step 3: Evaluate fitness
-                selecteds = self.select_bests(scores, population)  # Step 4: Selection
-                children = self.reproduce(selecteds)  # Step 5: Crossover + Mutation
-                population = selecteds + children  # Step 6: New population
 
-            best = self.select_the_best(population)  # Step 7: Best solution found
-            new_sequences.append(best)  # Save the optimized sequence
+                # Use multiprocessing for faster scoring
+                with ThreadPoolExecutor() as executor:
+                    scores = list(executor.map(self.calculate_score, population))
+
+                # Find best in generation
+                min_gen_score = min(scores)
+                gen_best = population[scores.index(min_gen_score)]
+
+                # Update best overall if improved
+                if min_gen_score < best_score:
+                    best_score = min_gen_score
+                    best_individual = gen_best
+                    no_improvement = 0
+                    logging.info(f"New best score: {best_score:.2f}")
+                else:
+                    no_improvement += 1
+                    logging.info(f"No improvement: {no_improvement} consecutive generations")
+
+                # Early stopping condition
+                if no_improvement >= early_stop_patience:
+                    logging.info(f"Early stopping at generation {gen} (patience {early_stop_patience})")
+                    break
+
+                # Selection, reproduction, elitism
+                selecteds = self.select_bests(scores, population)
+                children = self.reproduce(selecteds)
+                population = [best_individual] + selecteds + children[:-1]  # apply elitism
+
+            new_sequences.append(best_individual)
 
         self.sequences = new_sequences
 
@@ -363,7 +415,7 @@ class Rescuer(AbstAgent):
             # remaining time is not necessary here
             plan_back, plan_back_cost = a_astar.calc_plan(goal, (0,0))
             # calculate next move based on time available (-1 is used for aditional time)
-            plan, time = a_astar.calc_plan(start, goal, self.plan_rtime - plan_back_cost - 1)
+            plan, time = a_astar.calc_plan(start, goal, self.plan_rtime - plan_back_cost - 5)
             # if plan and time != -1:
             #     self.plan += plan
             #     self.plan_rtime = self.plan_rtime - time - 1
@@ -376,7 +428,7 @@ class Rescuer(AbstAgent):
                 print(f"{self.NAME} Plan fail - no path between {start} and {goal}")
                 break
             self.plan += plan
-            self.plan_rtime = self.plan_rtime - time - 1
+            self.plan_rtime = self.plan_rtime - time - 5
             print("Remaining time for the rescuer: ", self.plan_rtime)
             start = goal
 
