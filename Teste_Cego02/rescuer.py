@@ -11,9 +11,6 @@ import math
 import csv
 import sys
 import logging
-import concurrent.futures
-import os
-import random
 from map import Map
 from vs.abstract_agent import AbstAgent
 from vs.physical_agent import PhysAgent
@@ -27,7 +24,7 @@ import joblib
 import pandas as pd
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 ## Classe que define o Agente Rescuer com um plano fixo
 class Rescuer(AbstAgent):
@@ -40,27 +37,17 @@ class Rescuer(AbstAgent):
 
         super().__init__(env, config_file)
 
-        # Specific initialization for the rescuer
-        self.nb_of_explorers = nb_of_explorers       # number of explorer agents to wait for start
-        self.received_maps = 0                       # counts the number of explorers' maps
-        self.map = Map()                             # explorer will pass the map
-        self.victims = {}            # a dictionary of found victims: [vic_id]: ((x,y), [<vs>])
-        self.plan = []               # a list of planned actions in increments of x and y
-        self.plan_x = 0              # the x position of the rescuer during the planning phase
-        self.plan_y = 0              # the y position of the rescuer during the planning phase
-        self.plan_visited = set()    # positions already planned to be visited 
-        self.plan_rtime = self.TLIM  # the remaing time during the planning phase
-        self.plan_walk_time = 0.0    # previewed time to walk during rescue
-        self.x = 0                   # the current x position of the rescuer when executing the plan
-        self.y = 0                   # the current y position of the rescuer when executing the plan
-        self.clusters = clusters     # the clusters of victims this agent should take care of - see the method cluster_victims
-        self.sequences = clusters    # the sequence of visit of victims for each cluster 
-        
-        # A* algorithm to calculate the path between victims
-        self.a_star = AStar((0, 0), self.map)
+        self.nb_of_explorers = nb_of_explorers
+        self.received_maps = 0
+        self.map = Map()
+        self.victims = {}
+        self.plan = []
+        self.x = 0
+        self.y = 0
+        self.clusters = clusters
+        self.sequences = clusters
+        self.distance_cache = {}
 
-        # Starts in IDLE state.
-        # It changes to ACTIVE when the map arrives
         self.set_state(VS.IDLE)
     
     def save_cluster_csv(self, cluster, cluster_id):
@@ -71,7 +58,6 @@ class Rescuer(AbstAgent):
                 x, y = values[0]      # x,y coordinates
                 vs = values[1]        # list of vital signals
                 writer.writerow([vic_id, x, y, vs[6], vs[7]])
-
 
     def save_sequence_csv(self, sequence, sequence_id):
         filename = f"./clusters/seq{sequence_id}.txt"
@@ -155,10 +141,11 @@ class Rescuer(AbstAgent):
 
     def predict_severity_and_class(self):
         if os.path.exists('./models/modelo_random_forest.pkl'):
-                model = joblib.load('./models/modelo_random_forest.pkl')
+            classificator = joblib.load('./models/modelo_random_forest.pkl')
 
-        
-        regressor = joblib.load('./models/modelo_random_forest.pkl')
+        if os.path.exists('./models/modelo_arvore_regressor.pkl'):
+            regressor = joblib.load('./models/modelo_arvore_regressor.pkl')
+
         for vic_id, values in self.victims.items():
             qPA = values[1][3]
             pulso = values[1][4]
@@ -170,276 +157,162 @@ class Rescuer(AbstAgent):
                 'freqResp': freqResp
             }])
 
-            # try:
-            y_pred = model.predict(victim_data.to_numpy())  # Uma classe, ex: [2]
-            # severity_value =  random.uniform(0.1, 99.9)          # to be replaced by a regressor 
+            y_pred = classificator.predict(victim_data.to_numpy())  # Uma classe, ex: [2]
             severity_value = regressor.predict(victim_data.to_numpy())[0]
             severity_class = int(y_pred[0])
             values[1].extend([severity_value, severity_class])  # append to the list of vital signals; values is a pair( (x,y), [<vital signals list>] )
 
     def create_population(self, sequence, pop_size):
-        logging.debug("Creating initial population")
         population = []
-
-        # Add a greedy individual
         population.append(self.greedy_individual(sequence))
-
-        # Add individuals sorted by different heuristics
-        by_x = dict(sorted(sequence.items(), key=lambda item: item[1][0][0]))
-        by_y = dict(sorted(sequence.items(), key=lambda item: item[1][0][1]))
-        by_gravity = dict(sorted(sequence.items(), key=lambda item: item[1][1][6], reverse=True))  # highest gravity first
-        by_priority = dict(sorted(sequence.items(), key=lambda item: 5 - item[1][1][7], reverse=True))  # highest priority first
-
-        population.extend([by_x, by_y, by_gravity, by_priority])
-
-        # Fill the rest randomly
+        population.append(dict(sorted(sequence.items(), key=lambda item: item[1][0][0])))
+        population.append(dict(sorted(sequence.items(), key=lambda item: item[1][0][1])))
+        population.append(dict(sorted(sequence.items(), key=lambda item: item[1][1][6], reverse=True)))
+        population.append(dict(sorted(sequence.items(), key=lambda item: 5 - item[1][1][7], reverse=True)))
         while len(population) < pop_size:
-            individual = list(sequence.items())
-            random.shuffle(individual)
-            population.append(dict(individual))
-
-        logging.debug(f"Initial population created with {len(population)} individuals.")
+            individual_list = list(sequence.items())
+            random.shuffle(individual_list)
+            population.append(dict(individual_list))
         return population
-
     
     def greedy_individual(self, sequence):
-        """Create an individual using a greedy approach with some randomness."""
         unvisited = list(sequence.items())
-        current_position = (0, 0)
-        individual = {}
-        a_star = AStar((0, 0), self.map)
-
+        current_position, individual = (0, 0), {}
         while unvisited:
-            # Find the nearest unvisited victims
-            distances = [
-                (item, a_star.get_shortest_cost(current_position, item[1][0]) / (item[1][1][6] + 1))  # prioritize severity
-                for item in unvisited
-            ]
+            distances = [(item, self.distance_cache.get((current_position, item[1][0]), float('inf')) / (item[1][1][6] + 1)) for item in unvisited]
             distances.sort(key=lambda x: x[1])
-
-            # Introduce randomness: select one of the nearest victims
-            nearest_victims = distances[:3]  # Consider the 3 nearest victims
-            selected_victim = random.choice(nearest_victims)
-            
+            selected_victim = random.choice(distances[:1]) # Pega o melhor
             individual[selected_victim[0][0]] = selected_victim[0][1]
             current_position = selected_victim[0][1][0]
             unvisited.remove(selected_victim[0])
-
         return individual
     
     def calculate_score(self, individual):
-        a_astar = AStar((0, 0), self.map)
-
-        total_time = 0
-        weighted_gravity_score = 0
-        weighted_class_score = 0
-        walking_time = 0
-        time_limit = self.TLIM - 100  # buffer for return
-
-        keys = list(individual.keys())
-        start = (0, 0)
-
+        total_time, weighted_gravity_score, weighted_class_score, walking_time = 0, 0, 0, 0
+        time_limit = self.TLIM - 100
+        keys, start_pos = list(individual.keys()), (0, 0)
         for i, vic_id in enumerate(keys):
-            goal = individual[vic_id][0]
+            goal_pos = individual[vic_id][0]
             vs = individual[vic_id][1]
-
-            gravity = vs[6]           # [0–100]
-            class_priority = 5 - vs[7]  # class: 1 → 4, 2 → 3, ..., 4 → 1
-
-            # Normalize both scores to [0, 1]
-            norm_gravity = gravity / 100
-            norm_priority = class_priority / 4
-
-            # Path cost
-            cost = a_astar.get_shortest_cost(start, goal)
-            if cost == -1:
-                return float('inf')  # invalid path
-
-            cost += self.COST_FIRST_AID
-            total_time += cost
+            gravity, class_priority = vs[6], 5 - vs[7]
+            norm_gravity, norm_priority = gravity / 100.0, class_priority / 4.0
+            cost = self.distance_cache.get((start_pos, goal_pos), float('inf'))
+            if cost == float('inf'): return float('inf')
             walking_time += cost
-
-            # Give more weight to early rescues of high-priority victims
+            total_time += cost + self.COST_FIRST_AID
             position_weight = (len(keys) - i) / len(keys)
-
             weighted_gravity_score += norm_gravity * position_weight
             weighted_class_score += norm_priority * position_weight
-
-            start = goal
-
-        # Normalize walking time (if needed, depending on max possible time in your map)
-        norm_walk_time = walking_time / max(self.TLIM, 1)
-
-        # Penalize plans that exceed the time limit
-        overtime_penalty = 0
-        if total_time > time_limit:
-            overtime_penalty = (total_time - time_limit) * 10
-
-        # Weighted score formula
-        score = (
-            weighted_gravity_score * 50 +
-            weighted_class_score * 50 -
-            norm_walk_time * 40 +
-            overtime_penalty
-        )
-
-        logging.debug(f"Score for individual: {score}")
-        logging.debug(f"Time for individual: {total_time}")
+            start_pos = goal_pos
+        return_cost = self.distance_cache.get((start_pos, (0,0)), float('inf'))
+        if return_cost == float('inf'): return float('inf')
+        total_time += return_cost
+        walking_time += return_cost
+        overtime_penalty = max(0, total_time - time_limit) * 10
+        score = (walking_time + overtime_penalty - (weighted_gravity_score * 50) - (weighted_class_score * 50))
         return score
     
     def select_bests(self, scores, population):
-        logging.debug("Selecting best individuals")
-        # Sort the population based on the scores in ascending order
-        sorted_population = [x for _, x in sorted(zip(scores, population), key=lambda pair: pair[0], reverse=True)]
-        # Select the top half of the sorted population
-        selected_population = sorted_population[:len(population) // 2]
-        # logging.debug(f"Selected best individuals: {selected_population}")
-        return selected_population
+        return [x for _, x in sorted(zip(scores, population), key=lambda pair: pair[0])][:len(population) // 2]
     
     def reproduce(self, selecteds):
-        logging.debug("Reproducing new generation")
         children = []
-        num_selected = len(selecteds)
-        mutation_rate = 0.35  # Slightly higher for exploration
-
-        for i in range(num_selected):
-            parent1 = list(selecteds[i].items())
-            parent2 = list(selecteds[(i + 1) % num_selected].items())
-
-            # Order Crossover (OX)
-            start, end = sorted(random.sample(range(len(parent1)), 2))
-            child = [None] * len(parent1)
-            child[start:end] = parent1[start:end]
-            parent2_items = [item for item in parent2 if item not in child]
-            child = [item if item is not None else parent2_items.pop(0) for item in child]
-            child = dict(child)
-
-            # Swap Mutation
-            if random.random() < mutation_rate:
-                keys = list(child.keys())
-                idx1, idx2 = random.sample(range(len(keys)), 2)
-                keys[idx1], keys[idx2] = keys[idx2], keys[idx1]
-                child = {key: child[key] for key in keys}
-
-            # Inversion Mutation (new)
+        for i in range(len(selecteds)):
+            parent1_list = list(selecteds[i].items())
+            parent2_list = list(selecteds[(i + 1) % len(selecteds)].items())
+            start, end = sorted(random.sample(range(len(parent1_list)), 2))
+            p1_slice = parent1_list[start:end]
+            child_list = [None] * len(parent1_list)
+            child_list[start:end] = p1_slice
+            ids_from_p1 = {item[0] for item in p1_slice}
+            p2_items_to_add = [item for item in parent2_list if item[0] not in ids_from_p1]
+            p2_idx = 0
+            for j in range(len(child_list)):
+                if child_list[j] is None: child_list[j] = p2_items_to_add[p2_idx]; p2_idx += 1
+            child = dict(child_list)
+            if random.random() < 0.35:
+                keys = list(child.keys()); idx1, idx2 = random.sample(range(len(keys)), 2)
+                keys[idx1], keys[idx2] = keys[idx2], keys[idx1]; child = {key: child[key] for key in keys}
             if random.random() < 0.15:
-                keys = list(child.items())
-                start, end = sorted(random.sample(range(len(keys)), 2))
-                keys[start:end] = reversed(keys[start:end])
-                child = dict(keys)
-
+                keys = list(child.keys()); start_mut, end_mut = sorted(random.sample(range(len(keys)), 2))
+                sub_list = keys[start_mut:end_mut]; sub_list.reverse(); keys[start_mut:end_mut] = sub_list
+                child = {key: child[key] for key in keys}
             children.append(child)
-
         return children
-    
-    def select_the_best(self, population):
-        logging.debug("Selecting the best individual from the population")
-        best = min(population, key=self.calculate_score)
-        # logging.debug(f"Best individual selected: {best}")
-        return best
+
+    def select_the_best(self, population, scores):
+        if not scores: return None, float('inf')
+        min_score = min(scores)
+        return population[scores.index(min_score)], min_score
 
     def sequencing(self):
-        """ Genetic Algorithm with Elitism, Early Stopping, and Multiprocessing """
-        from concurrent.futures import ThreadPoolExecutor
-
-        pop_size = 20
-        gen_size = 10
-        early_stop_patience = 5
+        pop_size, gen_size, early_stop_patience = 50, 100, 15
         new_sequences = []
-
         for seq in self.sequences:
+            if not seq: continue
+            logging.info(f"[{self.NAME}] Pre-calculating A* distances for {len(seq)} victims...")
+            points_of_interest = {'base': (0, 0), **{vic_id: values[0] for vic_id, values in seq.items()}}
+            a_star_calculator = AStar((0, 0), self.map)
+            self.distance_cache = {(p1, p2): a_star_calculator.get_shortest_cost(p1, p2) for p1 in points_of_interest.values() for p2 in points_of_interest.values() if p1 != p2}
+            logging.info(f"[{self.NAME}] Distance cache created.")
+            
             population = self.create_population(seq, pop_size)
-            best_individual = None
-            best_score = float('inf')
-            no_improvement = 0
-
+            best_individual, best_score, no_improvement_count = population[0], float('inf'), 0
+            
             for gen in range(gen_size):
-                logging.info(f"Generation {gen}")
-
-                # Use multiprocessing for faster scoring
-                with ThreadPoolExecutor() as executor:
-                    scores = list(executor.map(self.calculate_score, population))
-
-                # Find best in generation
-                min_gen_score = min(scores)
-                gen_best = population[scores.index(min_gen_score)]
-
-                # Update best overall if improved
-                if min_gen_score < best_score:
-                    best_score = min_gen_score
-                    best_individual = gen_best
-                    no_improvement = 0
-                    logging.info(f"New best score: {best_score:.2f}")
+                scores = [self.calculate_score(ind) for ind in population]
+                gen_best_individual, gen_best_score = self.select_the_best(population, scores)
+                
+                if gen_best_individual and gen_best_score < best_score:
+                    best_score, best_individual, no_improvement_count = gen_best_score, gen_best_individual, 0
+                    logging.info(f"[{self.NAME}] Generation {gen}: New best score = {best_score:.2f}")
                 else:
-                    no_improvement += 1
-                    logging.info(f"No improvement: {no_improvement} consecutive generations")
-
-                # Early stopping condition
-                if no_improvement >= early_stop_patience:
-                    logging.info(f"Early stopping at generation {gen} (patience {early_stop_patience})")
+                    no_improvement_count += 1
+                
+                if no_improvement_count >= early_stop_patience:
+                    logging.info(f"[{self.NAME}] Early stopping at generation {gen}.")
                     break
-
-                # Selection, reproduction, elitism
+                
                 selecteds = self.select_bests(scores, population)
                 children = self.reproduce(selecteds)
-                population = [best_individual] + selecteds + children[:-1]  # apply elitism
+                population = [best_individual] + children + selecteds[:-1]
 
-            new_sequences.append(best_individual)
-
+            if best_individual: new_sequences.append(best_individual)
         self.sequences = new_sequences
 
     def planner(self):
-        """ A method that calculates the path between victims: walk actions in a OFF-LINE MANNER (the agent plans, stores the plan, and
-            after it executes. Eeach element of the plan is a pair dx, dy that defines the increments for the the x-axis and  y-axis."""
-
-        # The planner uses the A* algorithm to calculate the path between victims
-        a_astar = AStar((0,0),self.map)
-
-        # for each victim of the first sequence of rescue for this agent, we're going go calculate a path
-        # starting at the base - always at (0,0) in relative coords
+        if not self.sequences: return
+        a_astar = AStar((0,0), self.map)
+        sequence = self.sequences[0]
         
-        if not self.sequences:   # no sequence assigned to the agent, nothing to do
+        complete_plan, total_cost = [], 0
+        start_pos = (0,0)
+        
+        for vic_id in sequence:
+            goal_pos = sequence[vic_id][0]
+            plan_segment, time = a_astar.calc_plan(start_pos, goal_pos)
+            if not plan_segment:
+                logging.error(f"[{self.NAME}] Planner failed: No path from {start_pos} to {goal_pos}")
+                return
+            complete_plan += plan_segment
+            total_cost += time + self.COST_FIRST_AID
+            start_pos = goal_pos
+        
+        plan_back, time_back = a_astar.calc_plan(start_pos, (0,0))
+        if not plan_back:
+            logging.error(f"[{self.NAME}] Planner failed: No path back to base from {start_pos}")
             return
 
-        # we consider only the first sequence (the simpler case)
-        # The victims are sorted by x followed by y positions: [vic_id]: ((x,y), [<vs>]
+        complete_plan += plan_back
+        total_cost += time_back
 
-        sequence = self.sequences[0]
-        start = (0,0) # always from starting at the base
+        if total_cost < self.TLIM:
+            self.plan = complete_plan
+            logging.info(f"[{self.NAME}] Plan created successfully. Total cost: {total_cost:.2f}")
+        else:
+            logging.warning(f"[{self.NAME}] Optimal plan discarded, time insufficient. Cost: {total_cost:.2f}, Time Limit: {self.TLIM}")
+            self.plan = []
 
-        for vic_id in sequence:
-            goal = sequence[vic_id][0]
-            # print(f"{self.NAME} Plan: from {start} to {goal}")
-            # plan, time = bfs.search(start, goal, self.plan_rtime)
-
-            # remaining time is not necessary here
-            plan_back, plan_back_cost = a_astar.calc_plan(goal, (0,0))
-            # calculate next move based on time available (-1 is used for aditional time)
-            plan, time = a_astar.calc_plan(start, goal, self.plan_rtime - plan_back_cost - 5)
-            # if plan and time != -1:
-            #     self.plan += plan
-            #     self.plan_rtime = self.plan_rtime - time - 1
-            #     print("Remaining time for the rescuer: ", self.plan_rtime)
-            #     start = goal
-            # else:
-            #     print(f"{self.NAME} Plan fail - no path between {start} and {goal}")
-            #     break
-            if time == -1:
-                print(f"{self.NAME} Plan fail - no path between {start} and {goal}")
-                break
-            self.plan += plan
-            self.plan_rtime = self.plan_rtime - time - 5
-            print("Remaining time for the rescuer: ", self.plan_rtime)
-            start = goal
-
-        # Plan to come back to the base
-        goal = (0,0)
-        plan_back, plan_back_cost = a_astar.calc_plan(start, goal, self.plan_rtime)
-        self.plan = self.plan + plan_back
-        self.plan_rtime = self.plan_rtime - plan_back_cost
-        print("Remaining time for the rescuer: ", self.plan_rtime)
-        print("Time to get back to the base: ", plan_back_cost)
-    
     def sync_explorers(self, explorer_map, victims):
         """ This method should be invoked only to the master agent
 
@@ -507,7 +380,7 @@ class Rescuer(AbstAgent):
             
                 rescuer.planner()            # make the plan for the trajectory
                 rescuer.set_state(VS.ACTIVE) # from now, the simulator calls the deliberation method 
-        
+    
     def deliberate(self) -> bool:
         """ This is the choice of the next action. The simulator calls this
         method at each reasonning cycle if the agent is ACTIVE.
@@ -548,5 +421,3 @@ class Rescuer(AbstAgent):
             pass
             
         return True
-
-
