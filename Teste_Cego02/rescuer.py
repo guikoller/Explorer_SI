@@ -68,6 +68,14 @@ class Rescuer(AbstAgent):
                 vs = values[1]        # list of vital signals
                 writer.writerow([id, x, y, vs[6], vs[7]])
 
+    def save_prediction_csv(self):
+        filename = f"./predictions/file_predict.txt"
+        with open(filename, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            for id, values in self.victims.items():
+                x, y = values[0]      # x,y coordinates
+                vs = values[1]        # list of vital signals
+                writer.writerow([id, x, y, vs[6], vs[7]])
 
     def cluster_victims(self):
         # Find the upper and lower limits for x, y, and gravity class
@@ -140,27 +148,63 @@ class Rescuer(AbstAgent):
         return clusters
 
     def predict_severity_and_class(self):
-        if os.path.exists('./models/modelo_random_forest.pkl'):
-            classificator = joblib.load('./models/modelo_random_forest.pkl')
+        """
+        Prevê o valor e a classe de gravidade para cada vítima usando:
+        - Regressor: Rede Neural (com dados escalados)
+        - Classificador: Random Forest (com dados brutos)
+        """
+        # --- Carregamento dos Modelos e do Scaler Necessário ---
 
-        if os.path.exists('./models/modelo_arvore_regressor.pkl'):
-            regressor = joblib.load('./models/modelo_arvore_regressor.pkl')
+        # Carrega o modelo de CLASSIFICAÇÃO (Random Forest)
+        # Este modelo NÃO precisa de um scaler.
+        if os.path.exists('./models/trained_models/model_CART_classifier.pkl'):
+            classifier = joblib.load('./models/trained_models/model_CART_classifier.pkl')
+        else:
+            print("Erro: Modelo classificador (model_CART_classifier.pkl) não encontrado.")
+            return
 
+        # Carrega o modelo de REGRESSÃO (Rede Neural) e seu scaler
+        # Este modelo PRECISA do scaler com o qual foi treinado.
+        if os.path.exists('./models/trained_models/model_neural_network_regressor.pkl'):
+            regressor = joblib.load('./models/trained_models/model_neural_network_regressor.pkl')
+            scaler_reg = joblib.load('./models/trained_models/scaler_regressor.pkl') # O scaler é essencial
+        else:
+            print("Erro: Modelo regressor ou seu scaler não encontrado.")
+            return
+
+        # --- Loop de Previsão ---
+        
         for vic_id, values in self.victims.items():
+            # Extrai os sinais vitais da estrutura de dados
             qPA = values[1][3]
             pulso = values[1][4]
             freqResp = values[1][5]
 
+            # Cria um DataFrame para garantir a ordem e o formato corretos
             victim_data = pd.DataFrame([{
                 'qPA': qPA,
                 'pulso': pulso,
                 'freqResp': freqResp
             }])
 
-            y_pred = classificator.predict(victim_data.to_numpy())  # Uma classe, ex: [2]
-            severity_value = regressor.predict(victim_data.to_numpy())[0]
-            severity_class = int(y_pred[0])
-            values[1].extend([severity_value, severity_class])  # append to the list of vital signals; values is a pair( (x,y), [<vital signals list>] )
+            # --- Previsão da CLASSE (Random Forest) ---
+            # Usa os dados BRUTOS (não escalados), como no treinamento.
+            severity_class = int(classifier.predict(victim_data.to_numpy())[0])
+            # Se suas classes no ambiente são (1, 2, 3, 4), pode ser necessário somar 1.
+            # Ex: severity_class = int(classifier.predict(victim_data.to_numpy())[0]) + 1
+
+            # Adiciona 1 para converter a previsão de volta para a escala original [1, 2, 3, 4]
+            severity_class = severity_class + 1
+
+            # --- Previsão do VALOR (Rede Neural) ---
+            # 1. Escala os dados usando o scaler específico do regressor
+            victim_data_scaled = scaler_reg.transform(victim_data)
+
+            # 2. Faz a previsão do valor contínuo com os dados escalados
+            severity_value = regressor.predict(victim_data_scaled)[0]
+            
+            # Anexa os valores previstos à lista de sinais vitais da vítima
+            values[1].extend([severity_value, severity_class])
 
     def create_population(self, sequence, pop_size):
         population = []
@@ -336,6 +380,8 @@ class Rescuer(AbstAgent):
 
             #TODO: predict the severity and the class of victims' using a classifier
             self.predict_severity_and_class()
+
+            self.save_prediction_csv()
 
             #cluster the victims possibly using the severity and other criteria
             # Here, there 4 clusters

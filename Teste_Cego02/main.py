@@ -68,10 +68,10 @@ if __name__ == '__main__':
     # Define as pastas padrão se nenhum argumento for passado.
     if len(sys.argv) > 1:
         data_folder_name = sys.argv[1]
-        config_ag_folder_name = sys.argv[2] if len(sys.argv) > 2 else os.path.join("", "cfg_1")
+        config_ag_folder_name = sys.argv[2] if len(sys.argv) > 2 else os.path.join("", "cfg")
     else:
         # Caminhos padrão para os dados e configurações
         data_folder_name = os.path.join("datasets", "data_408v_94x94")
-        config_ag_folder_name = os.path.join("", "cfg_1")
+        config_ag_folder_name = os.path.join("", "cfg")
         
     main(data_folder_name, config_ag_folder_name)
