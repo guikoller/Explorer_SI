@@ -1,0 +1,54 @@
+PS D:\Downloads\SI\Explorer_SI\Teste_Cego02> python .\plot_clusters_and_seq.py
+D:\Python\Lib\site-packages\pygame\pkgdata.py:25: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import resource_stream, resource_exists
+pygame 2.6.1 (SDL 2.28.4, Python 3.13.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Stats printed by plot_clusters_and_seq.py
+
+
+----------------------------------------
+Total of rows......: 94
+Total of cols......: 94
+Total of cells.....: 8836
+Base position......: [46, 46]
+Coordinates are absolute? False
+
+----------------------------------------
+Cluster: cluster1.txt 105 victims, being...
+   29 critical,
+   35 instable,
+   19 pot inst., and
+   22 stable.
+
+Cluster: cluster2.txt 101 victims, being...
+   27 critical,
+   35 instable,
+   19 pot inst., and
+   20 stable.
+
+Cluster: cluster3.txt 101 victims, being...
+   27 critical,
+   33 instable,
+   22 pot inst., and
+   19 stable.
+
+Cluster: cluster4.txt 97 victims, being...
+   27 critical,
+   37 instable,
+   17 pot inst., and
+   16 stable.
+
+
+----------------------------------------
+Total of walls.....: 563 (6.4% of the env)
+  upper left  quad.: 83 (14.7%)
+  upper right quad.: 277 (49.2%)
+  lower left  quad.: 121 (21.5%)
+  lower right quad.: 82 (14.6%)
+
+------------------------------------------
+Total of victims...: 408
+  upper left  quad.: 103 (25.2%)
+  upper right quad.: 102 (25.0%)
+  lower left  quad.: 101 (24.8%)
+  lower right quad.: 102 (25.0%)

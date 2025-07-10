@@ -1,0 +1,50 @@
+PS D:\Downloads\SI\Explorer_SI\Teste_Cego02\predictions> python .\compare_predict_target_withMatch.py
+------------------------------------------------------------
+GENERAL METRICS
+
+Reference dataset: file_target.txt Length: 408
+Predict          : file_predict.txt Length: 404
+Matching rows    : 404
+
+------------------------------------------------------------
+REGRESSOR METRICS
+Root Mean Square Error (RMSE) for matching rows: 2.40
+
+------------------------------------------------------------
+CLASSIFICATION METRICS
+
+Confusion Matrix:
+[[107   5   0   0]
+ [  3 118   2   0]
+ [  0  17  64   2]
+ [  0   0  11  75]]
+
+Accuracy: 0.900990099009901
+
+Classification Report:
+              precision    recall  f1-score   support
+
+     Critico       0.97      0.96      0.96       112
+    Instavel       0.84      0.96      0.90       123
+ Pot Estavel       0.83      0.77      0.80        83
+     Estavel       0.97      0.87      0.92        86
+
+    accuracy                           0.90       404
+   macro avg       0.91      0.89      0.90       404
+weighted avg       0.90      0.90      0.90       404
+
+
+------------------------------------------------------------
+SPECIFIC METRICS
+
+   Critical victims   (1) = 112 out of 112 (100.0)%
+   Instable victims   (2) = 123 out of 124 (99.2)%
+   Pot. inst. victims (3) =  83 out of 84 (98.8)%
+   Stable victims     (4) =  86 out of 88 (97.7)%
+   --------------------------------------
+   Total of victims  = 404 (99.02%)
+
+   Weighted victims per severity = 31.69
+
+   Sum of gravities of matched victims = 18280.83 of a total of 18528.67
+     % of gravities of matched victims = 0.99

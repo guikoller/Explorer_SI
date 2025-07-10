@@ -1,0 +1,26 @@
+Iniciando a busca pelos melhores hiperparâmetros...
+Configuração: max_depth=29, min_samples_leaf=5 -> Test RMSE: 3.0529
+*** Nova melhor configuração encontrada! MSE: 9.3203 ***
+Configuração: max_depth=29, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=29, min_samples_leaf=50 -> Test RMSE: 6.0247
+Configuração: max_depth=50, min_samples_leaf=5 -> Test RMSE: 3.0529
+Configuração: max_depth=50, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=50, min_samples_leaf=50 -> Test RMSE: 6.0247
+Configuração: max_depth=100, min_samples_leaf=5 -> Test RMSE: 3.0529
+Configuração: max_depth=100, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=100, min_samples_leaf=50 -> Test RMSE: 6.0247
+Configuração: max_depth=200, min_samples_leaf=5 -> Test RMSE: 3.0529
+Configuração: max_depth=200, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=200, min_samples_leaf=50 -> Test RMSE: 6.0247
+Configuração: max_depth=400, min_samples_leaf=5 -> Test RMSE: 3.0529
+Configuração: max_depth=400, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=400, min_samples_leaf=50 -> Test RMSE: 6.0247
+Configuração: max_depth=None, min_samples_leaf=5 -> Test RMSE: 3.0529
+Configuração: max_depth=None, min_samples_leaf=25 -> Test RMSE: 4.9835
+Configuração: max_depth=None, min_samples_leaf=50 -> Test RMSE: 6.0247
+
+Busca finalizada.
+Melhor configuração encontrada: {'max_depth': 29, 'min_samples_leaf': 5}
+Melhor Test RMSE (Raiz do Erro Quadrático Médio): 3.0529
+
+Melhor modelo (model_CART_regressor.pkl) salvo com sucesso!
